@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Claude Autonomous Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .tool-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:9999px; font-size:0.72rem; font-weight:600; }
+    pre { background:#1e1e2e; color:#cdd6f4; padding:1rem; border-radius:8px; overflow-x:auto; font-size:0.8rem; }
+    code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+    .msg-user   { background:#eff6ff; border-left:3px solid #3b82f6; }
+    .msg-agent  { background:#f0fdf4; border-left:3px solid #22c55e; }
+    .msg-think  { background:#fafafa; border-left:3px solid #e5e7eb; }
+    .tool-call  { background:#fef3c7; border-left:3px solid #f59e0b; }
+    .tool-res   { background:#f0f9ff; border-left:3px solid #0ea5e9; }
+    .dot-pulse::after { content:'...'; animation:dots 1.2s steps(4,end) infinite; }
+    @keyframes dots { 0%,20%{content:'.'} 40%{content:'..'} 60%,100%{content:'...'} }
+    #answer-box p  { margin-bottom:0.4rem; }
+    #answer-box ul { list-style:disc; padding-left:1.25rem; margin-bottom:0.4rem; }
+    #answer-box ol { list-style:decimal; padding-left:1.25rem; margin-bottom:0.4rem; }
+    #answer-box h3 { font-weight:700; margin:0.6rem 0 0.2rem; }
+    #answer-box a  { color:#2563eb; text-decoration:underline; }
+    .msg { margin-bottom:12px; padding:12px 14px; border-radius:10px; }
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50">
+
+<!-- Header -->
+<header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-3">
+  <div class="w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center">
+    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+    </svg>
+  </div>
+  <div>
+    <h1 class="text-base font-semibold">Claude Autonomous Agent</h1>
+    <p class="text-xs text-gray-400">Web search · Wikipedia · Python · File reader · Calculator</p>
+  </div>
+  <div class="ml-auto flex items-center gap-2">
+    <label class="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5" for="file-upload">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+      </svg>
+      Upload file
+    </label>
+    <input id="file-upload" type="file" class="hidden" onchange="uploadFile(this)"/>
+    <span id="upload-status" class="text-xs text-green-600 hidden"></span>
+  </div>
+</header>
+
+<div class="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-4">
+
+  <!-- Example prompts -->
+  <div id="examples" class="grid grid-cols-2 gap-3">
+    <button class="example-btn text-left p-3 bg-white border border-gray-200 rounded-lg hover:border-violet-400 transition-colors text-sm text-gray-700"
+      onclick="setPrompt(this.dataset.q)" data-q="What is the current price of gold and why is it moving?">
+      💰 What is the current price of gold and why is it moving?
+    </button>
+    <button class="example-btn text-left p-3 bg-white border border-gray-200 rounded-lg hover:border-violet-400 transition-colors text-sm text-gray-700"
+      onclick="setPrompt(this.dataset.q)" data-q="Explain transformer architecture and calculate attention score for Q=[1,0], K=[1,1], scale by sqrt(2)">
+      🤖 Explain transformers + calculate attention score
+    </button>
+    <button class="example-btn text-left p-3 bg-white border border-gray-200 rounded-lg hover:border-violet-400 transition-colors text-sm text-gray-700"
+      onclick="setPrompt(this.dataset.q)" data-q="Who is Sam Altman and what has he been up to recently?">
+      🔍 Who is Sam Altman and what has he been up to recently?
+    </button>
+    <button class="example-btn text-left p-3 bg-white border border-gray-200 rounded-lg hover:border-violet-400 transition-colors text-sm text-gray-700"
+      onclick="setPrompt(this.dataset.q)" data-q="Calculate compound interest: ₹50,000 at 8% for 10 years compounded monthly">
+      📊 Compound interest: ₹50,000 at 8% for 10 years
+    </button>
+  </div>
+
+  <!-- Conversation -->
+  <div id="conversation" class="space-y-1 hidden"></div>
+
+  <!-- Input -->
+  <div class="bg-white border border-gray-200 rounded-xl p-3 flex gap-2 sticky bottom-4 shadow-sm">
+    <textarea id="input" rows="2" placeholder="Ask anything — I'll search the web, run code, read files..."
+      class="flex-1 resize-none text-sm focus:outline-none text-gray-800 placeholder-gray-400"
+      onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendMessage()}"
+    ></textarea>
+    <button id="send-btn" onclick="sendMessage()"
+      class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors self-end flex items-center gap-1.5">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+      </svg>
+      Send
+    </button>
+  </div>
+
+</div>
+
+<script>
+  const TOOL_ICONS = {
+    web_search: '🔍', wikipedia_lookup: '📖',
+    run_python: '🐍', read_file: '📄', calculator: '🧮'
+  };
+
+  let isRunning = false;
+
+  function setPrompt(q) {
+    document.getElementById('input').value = q;
+    document.getElementById('input').focus();
+  }
+
+  function addMsg(html, cls) {
+    const conv = document.getElementById('conversation');
+    conv.classList.remove('hidden');
+    document.getElementById('examples').classList.add('hidden');
+    const div = document.createElement('div');
+    div.className = `msg ${cls}`;
+    div.innerHTML = html;
+    conv.appendChild(div);
+    div.scrollIntoView({behavior:'smooth', block:'nearest'});
+    return div;
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function renderAnswer(text) {
+    // Basic markdown: **bold**, `code`, ``` blocks, ## headers, - bullets
+    return text
+      .replace(/```[\w]*\n?([\s\S]*?)```/g, (_, c) => `<pre><code>${escHtml(c.trim())}</code></pre>`)
+      .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 rounded text-xs">$1</code>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^#{1,3} (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^\s*[-*] (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+      .replace(/\n{2,}/g, '</p><p>')
+      .replace(/\n/g, '<br/>')
+      .replace(/^/, '<p>').replace(/$/, '</p>');
+  }
+
+  async function sendMessage() {
+    if (isRunning) return;
+    const input = document.getElementById('input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    isRunning = true;
+    input.value = '';
+    document.getElementById('send-btn').disabled = true;
+    document.getElementById('send-btn').classList.add('opacity-50');
+
+    // User message
+    addMsg(`<p class="text-sm text-gray-800">${escHtml(msg)}</p>`, 'msg-user');
+
+    // Thinking indicator
+    const thinkDiv = addMsg(
+      `<p class="text-xs text-gray-400 dot-pulse">Agent thinking</p>`,
+      'msg-think'
+    );
+
+    try {
+      const res = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: msg})
+      });
+
+      if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+
+          let event;
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.type === 'tool_call') {
+            thinkDiv.remove();
+            const icon = TOOL_ICONS[event.tool] || '🔧';
+            addMsg(
+              `<div class="flex items-center gap-2 text-xs">
+                <span class="tool-badge bg-amber-100 text-amber-700">${icon} ${event.tool}</span>
+                <span class="text-gray-500 font-mono truncate max-w-xs">${escHtml(JSON.stringify(event.input))}</span>
+              </div>`,
+              'tool-call'
+            );
+          } else if (event.type === 'tool_result') {
+            const out = event.output;
+            const preview = typeof out === 'object'
+              ? JSON.stringify(out).slice(0, 120) + (JSON.stringify(out).length > 120 ? '...' : '')
+              : String(out).slice(0, 120);
+            addMsg(
+              `<div class="text-xs text-gray-500">
+                <span class="tool-badge bg-sky-100 text-sky-700 mr-2">↩ ${event.tool}</span>
+                <span class="font-mono">${escHtml(preview)}</span>
+              </div>`,
+              'tool-res'
+            );
+          } else if (event.type === 'answer') {
+            thinkDiv.remove();
+            const ansDiv = addMsg('', 'msg-agent');
+            ansDiv.innerHTML = `
+              <div class="flex items-center gap-1.5 mb-2">
+                <div class="w-5 h-5 rounded-full bg-violet-100 flex items-center justify-center">
+                  <svg class="w-3 h-3 text-violet-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                  </svg>
+                </div>
+                <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Answer</span>
+              </div>
+              <div id="answer-box" class="text-sm text-gray-800 leading-relaxed">${renderAnswer(event.text)}</div>`;
+          } else if (event.type === 'error') {
+            thinkDiv.remove();
+            addMsg(`<p class="text-sm text-red-600">Error: ${escHtml(event.text)}</p>`, 'msg-think');
+          }
+        }
+      }
+    } catch (err) {
+      thinkDiv.remove();
+      addMsg(`<p class="text-sm text-red-600">Connection error: ${escHtml(err.message)}</p>`, 'msg-think');
+    }
+
+    isRunning = false;
+    document.getElementById('send-btn').disabled = false;
+    document.getElementById('send-btn').classList.remove('opacity-50');
+  }
+
+  async function uploadFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const status = document.getElementById('upload-status');
+    status.textContent = 'Uploading...';
+    status.classList.remove('hidden');
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/upload', {method:'POST', body: form});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail);
+      status.textContent = `✓ ${data.filename} uploaded`;
+      setTimeout(() => status.classList.add('hidden'), 3000);
+    } catch (e) {
+      status.textContent = `Error: ${e.message}`;
+      status.classList.add('text-red-500');
+    }
+    input.value = '';
+  }
+</script>
+</body>
+</html>
